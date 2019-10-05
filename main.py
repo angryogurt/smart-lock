@@ -3,86 +3,91 @@
 import serial
 import sqlite3
 import subprocess
-import time
 
 
-def check_card(card_code):
+def find_users_by_card(card_code):
     con_to_db = sqlite3.connect("Cards.db")
     cursor = con_to_db.cursor()
-    query_search = "SELECT user_id FROM cards WHERE card_code=?"
-    cursor.execute(query_search, (card_code,))
-    user_id = cursor.fetchone()
+    query_search = "SELECT user FROM users_cards WHERE card=?"
+    cursor.execute(query_search, card_code)
+    user_ids = cursor.fetchall()
     con_to_db.close()
-    if user_id is None:
-        return False
-    else:
-        return True
+    return user_ids
 
 
-def check_finger(card_code, finger_code):
+def find_fingers_by_user(user_ids):
     con_to_db = sqlite3.connect("Cards.db")
     cursor = con_to_db.cursor()
-    query_search = "SELECT user_id FROM fingers WHERE finger_id=?"
-    cursor.execute(query_search, (finger_code,))
-    user_id = cursor.fetchone()
-    query_search = "SELECT id FROM cards WHERE card_code=?, user_id=?"
-    cursor.execute(query_search, (card_code,user_id))
-    result = cursor.fetchone()
+    query_search = "SELECT finger FROM users_fingers WHERE user IN (?)"
+    cursor.execute(query_search, user_ids)
+    finger_ids = cursor.fetchall()
     con_to_db.close()
-    if result is None:
-        return False
+    return finger_ids
+
+
+def parse_card_number(line):
+    get_code = line.find("Card readed: 32bits")
+    if get_code > 0:
+        number = inputStr[get_code + 22:get_code + 30]
+        number = number[6] + number[7] + number[4] + number[5] + number[2] + number[3] + number[0] + number[1]
+        return number
+    return None
+
+
+def update_reading_mode(flag):
+    if flag:
+        command = "gpio write 1 0"
+        print("Start reading cards")
     else:
-        return True
+        command = "gpio write 1 1"
+        print("Start reading fingers")
+    process = subprocess.Popen(command.split(), stdout=subprocess.PIPE)
+    output, error = process.communicate()
 
 
-cardFounded = True
-ser = serial.Serial('/dev/ttyS1', 9600, timeout=30)
+card_reading_mode = True
+up_time = 1800
+ser_speed = 9600
+ser_port = '/dev/ttyS1'
+ser = serial.Serial(ser_port, ser_speed, timeout=up_time)
 print("Connection open on: " + ser.name)
-number = "NULL"
-bashCommand = "gpio write 1 0"
-process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
-output, error = process.communicate()
+update_reading_mode(card_reading_mode)
+fingers = []
 while True:
     out = ser.readline()
     if not out or out == "exit":
         break
     inputStr = str(out)
-    if cardFounded:
-        getNumber = inputStr.find("Card readed: 32bits")
-        if getNumber > 0:
-            number = inputStr[getNumber+22:getNumber+30]
-            number = number[6] + number[7] + number[4] + number[5] + number[2] + number[3] + number[0] + number[1]
-            if check_card(number):
-                cardFounded = False
-                tryCount = 0
-                bashCommand = "gpio write 1 1"
-                process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
-                output, error = process.communicate()
-                print("Found card:" + number)
+    if card_reading_mode:
+        mifare = parse_card_number(inputStr)
+        if not (mifare is None):
+            print("Found card with Mifare code:" + mifare)
+            users = find_users_by_card(mifare)
+            if not (users is None):
+                fingers = find_fingers_by_user(users)
+                if not (fingers is None):
+                    card_reading_mode = False
+                    update_reading_mode(card_reading_mode)
+                else:
+                    print("Missing fingerprints of cardholders. Access is denied.")
             else:
-                print("Found unknown card:" + number)
+                print("This card is not affiliated with any one person. Access is denied.")
     else:
         stopReading = inputStr.find("Timeout reading finger")
         if stopReading > 0:
-            cardFounded = True
-            bashCommand = "gpio write 1 0"
-            process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
-            output, error = process.communicate()
+            card_reading_mode = True
+            update_reading_mode(card_reading_mode)
             print("Timeout reading finger")
         else:
             getFinger = inputStr.find("Found ID #")
             if getFinger > 0:
-                image = inputStr[getFinger+10:]
-                if check_finger(number, image):
-                    cardFounded = True
+                finger = inputStr[getFinger+10:getFinger+13]
+                print("Found finger №{}".format(finger))
+                if fingers.count(finger) > 0:
                     print("Access denied")
-                    bashCommand = "gpio write 1 0"
-                    process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
-                    output, error = process.communicate()
-                    time.sleep(1)
-
-
+                    card_reading_mode = True
+                    update_reading_mode(card_reading_mode)
                 else:
-                    print("Found unknown finger")
+                    print("The entered fingerprint doesn't match the cardholder")
 print("Connection close on: " + ser.name)
 ser.close()

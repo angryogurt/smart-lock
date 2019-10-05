@@ -51,7 +51,7 @@ void setup() {
 }
 
 void loop() {
-  val = digitalRead(goReadFingerPin);
+  /*val = digitalRead(goReadFingerPin);
   digitalWrite(ledPin, val);
   if (val == HIGH) {
     digitalWrite(ledPin, HIGH);
@@ -67,6 +67,8 @@ void loop() {
     wiegand.flush();
     interrupts();
   };
+  */
+  getFingerprintID();
   delay(100);
 }
 
